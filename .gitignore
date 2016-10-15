@@ -31,3 +31,12 @@
 # Debug files
 *.dSYM/
 *.su
+
+# Official tests are compressed
+_test
+
+# Misc
+.DS_Store
+*.un~
+__MACOSX
+
