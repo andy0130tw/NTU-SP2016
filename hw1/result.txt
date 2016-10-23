@@ -1,0 +1,93 @@
+==============================================
+  Resetting files to original state...
+* Test 1: sequential read
+  Trying to read file [testcase/file1]
+    Response correct!
+  Trying to read file [testcase/file2]
+    Response correct!
+  Trying to read file [testcase/file3]
+    Response correct!
+Test 1 passed.
+==============================================
+  Resetting files to original state...
+* Test 2: sequential write
+  Trying to write to file [testcase/file2]
+    Response correct!
+    Sleep 1 second, let write_server finish its job...
+    File content correct!
+  Trying to write to file [testcase/file3]
+    Response correct!
+    Sleep 1 second, let write_server finish its job...
+    File content correct!
+  Trying to write to file [testcase/fileNew]
+    Response correct!
+    Sleep 1 second, let write_server finish its job...
+    File content correct!
+Test 2 passed.
+==============================================
+  Resetting files to original state...
+* Test 3: two reads at the same time
+  Trying to read file [testcase/file3] x 2
+    Response 1 correct!
+    Response 2 correct!
+  Trying to read file [testcase/file4] x 2
+    Response 1 correct!
+    Response 2 correct!
+Test 3 passed.
+==============================================
+  Resetting files to original state...
+* Test 4: two writes at the same time
+  Trying to write to file [testcase/file2] x 2
+    Response 2 correct!
+    Response 1 correct!
+    Sleep 1 second, let write_server finish its job...
+    File content correct!
+  Trying to write to file [testcase/fileNew] x 2
+    Response 2 correct!
+    Response 1 correct!
+    Sleep 1 second, let write_server finish its job...
+    File content correct!
+Test 4 passed.
+==============================================
+  Resetting files to original state...
+* Test 5: write then read
+  Trying to write, read file [testcase/file3]
+    Sleeping 1 sec to make sure request 1 is accepted
+    Response 2 correct!
+    Response 1 correct!
+    Sleep 1 second to wait write_server finish its job...
+    File content correct!
+  Trying to write, read file [testcase/fileNew]
+    Sleeping 1 sec to make sure request 1 is accepted
+    Response 2 correct!
+    Response 1 correct!
+    Sleep 1 second to wait write_server finish its job...
+    File content correct!
+Test 5 passed.
+==============================================
+  Resetting files to original state...
+* Test 6: multiple connection
+  Doing Test 1 & 2 to check if both server are functional.
+  Resetting files to original state...
+* Test 1: sequential read
+  Trying to read file [testcase/file1]
+    Response correct!
+  Trying to read file [testcase/file2]
+    Response correct!
+  Trying to read file [testcase/file3]
+    Response correct!
+  Resetting files to original state...
+* Test 2: sequential write
+  Trying to write to file [testcase/file2]
+    Response correct!
+    Sleep 1 second, let write_server finish its job...
+    File content correct!
+  Trying to write to file [testcase/file3]
+    Response correct!
+    Sleep 1 second, let write_server finish its job...
+    File content correct!
+  Trying to write to file [testcase/fileNew]
+    Response correct!
+    Sleep 1 second, let write_server finish its job...
+    File content correct!
+Test 6 passed.
