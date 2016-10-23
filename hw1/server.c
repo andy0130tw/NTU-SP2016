@@ -9,7 +9,31 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-#define ERR_EXIT(a) { perror(a); exit(1); }
+#include <sys/stat.h>
+int same_file(int fd1, int fd2) {
+    struct stat stat1, stat2;
+    if(fstat(fd1, &stat1) < 0) return -1;
+    if(fstat(fd2, &stat2) < 0) return -1;
+    return (stat1.st_dev == stat2.st_dev) && (stat1.st_ino == stat2.st_ino);
+}
+
+#ifdef COLOR
+#define CTRLSEQ_RED     "\x1b[31m"
+#define CTRLSEQ_GREEN   "\x1b[32m"
+#define CTRLSEQ_YELLOW  "\x1b[33m"
+#define CTRLSEQ_BLUE    "\x1b[34m"
+#define CTRLSEQ_GRAY    "\033[90m"
+#define CTRLSEQ_RESET   "\x1b[0m"
+#else
+#define CTRLSEQ_RED     ""
+#define CTRLSEQ_GREEN   ""
+#define CTRLSEQ_YELLOW  ""
+#define CTRLSEQ_BLUE    ""
+#define CTRLSEQ_GRAY    ""
+#define CTRLSEQ_RESET   ""
+#endif
+
+#define ERR_EXIT(a) { perror(CTRLSEQ_RED a CTRLSEQ_RESET); exit(1); }
 
 typedef struct {
     char hostname[512];  // server's hostname
@@ -26,6 +50,18 @@ typedef struct {
     char* filename;  // filename set in header, end with '\0'.
     int header_done;  // used by handle_read to know if the header is read or not.
 } request;
+
+typedef struct {
+   short l_type;    /* Type of lock: F_RDLCK,
+                       F_WRLCK, F_UNLCK */
+   short l_whence;  /* How to interpret l_start:
+                       SEEK_SET, SEEK_CUR, SEEK_END */
+   off_t l_start;   /* Starting offset for lock */
+   off_t l_len;     /* Number of bytes to lock */
+   pid_t l_pid;     /* PID of process blocking our lock
+                       (set by F_GETLK and F_OFD_GETLK) */
+} flock;
+
 
 server svr;  // server
 request* requestP = NULL;  // point to a list of requests
@@ -87,80 +123,199 @@ int main(int argc, char** argv) {
     // Loop for handling connections
     fprintf(stderr, "\nstarting on %.80s, port %d, fd %d, maxconn %d...\n", svr.hostname, svr.port, svr.listen_fd, maxfd);
 
+    fd_set readset;
+    FD_ZERO(&readset);
+
+#ifdef HEARTBEAT
+    int k = 0;
+#endif
+
+#ifdef READ_SERVER
+    int lock_ok;
+#endif
+
+#ifndef READ_SERVER
+    int write_fd[maxfd];
+    for (i = 0; i < maxfd; i++)
+        write_fd[i] = -1;
+#endif
+
     while (1) {
         // TODO: Add IO multiplexing
         // Check new connection
         clilen = sizeof(cliaddr);
-        conn_fd = accept(svr.listen_fd, (struct sockaddr*)&cliaddr, (socklen_t*)&clilen);
-        if (conn_fd < 0) {
-            if (errno == EINTR || errno == EAGAIN) continue;  // try again
-            if (errno == ENFILE) {
-                (void) fprintf(stderr, "out of file descriptor table ... (maxconn %d)\n", maxfd);
-                continue;
+
+#ifdef HEARTBEAT
+        fprintf(stderr, CTRLSEQ_GRAY "active fd");
+#endif
+        for (i = 0; i < maxfd; i++) {
+            if (requestP[i].conn_fd >= 0) {
+#ifdef HEARTBEAT
+                fprintf(stderr, " %d", requestP[i].conn_fd);
+#endif
+                FD_SET(requestP[i].conn_fd, &readset);
             }
-            ERR_EXIT("accept")
         }
-        requestP[conn_fd].conn_fd = conn_fd;
-        strcpy(requestP[conn_fd].host, inet_ntoa(cliaddr.sin_addr));
-        fprintf(stderr, "getting a new request... fd %d from %s\n", conn_fd, requestP[conn_fd].host);
+#ifdef HEARTBEAT
+        fprintf(stderr, " - %d\n" CTRLSEQ_RESET, k++);
+#endif
+
+#ifdef HEARTBEAT
+        struct timeval timeout = (struct timeval) {0, 80000};
+        int totfds = select(maxfd, &readset, NULL, NULL, &timeout);
+#else
+        int totfds = select(maxfd, &readset, NULL, NULL, NULL);
+#endif
+
+        if (totfds == 0) {
+            continue;
+        } else if (totfds < 0) {
+            ERR_EXIT("select");
+        }
+
+        // check the listening port first
+        int listen_ok = 0;
+        if (FD_ISSET(svr.listen_fd, &readset)) {
+            fprintf(stderr, CTRLSEQ_BLUE "Ready to accept socket fd %d\n" CTRLSEQ_RESET, svr.listen_fd);
+            listen_ok = 1;
+            FD_CLR(svr.listen_fd, &readset);
+        }
+
+        // then check for other ports
+        for (i = 0; i < maxfd; i++) {
+            if (FD_ISSET(i, &readset)) {
+                fprintf(stderr, "Ready to read from file fd %d\n", i);
+                conn_fd = i;
+                break;
+            }
+        }
+
+        // to be simple, re-enter the loop after accepting a connection
+        if (listen_ok) {
+            conn_fd = accept(svr.listen_fd, (struct sockaddr*)&cliaddr, (socklen_t*)&clilen);
+            if (conn_fd < 0) {
+                if (errno == EINTR || errno == EAGAIN) continue;  // try again
+                if (errno == ENFILE) {
+                    (void) fprintf(stderr, "out of file descriptor table ... (maxconn %d)\n", maxfd);
+                    continue;
+                }
+                ERR_EXIT("accept");
+            }
+            requestP[conn_fd].conn_fd = conn_fd;
+            strcpy(requestP[conn_fd].host, inet_ntoa(cliaddr.sin_addr));
+            fprintf(stderr, "getting a new request... fd %d from %s\n", conn_fd, requestP[conn_fd].host);
+            continue;
+        }
 
         file_fd = -1;
-        
 
 #ifdef READ_SERVER
+        lock_ok = 0;
         ret = handle_read(&requestP[conn_fd]);
-            if (ret < 0) {
-                fprintf(stderr, "bad request from %s\n", requestP[conn_fd].host);
-                continue;
-            }
-            // requestP[conn_fd]->filename is guaranteed to be successfully set.
-            if (file_fd == -1) {
-                // open the file here.
-                fprintf(stderr, "Opening file [%s]\n", requestP[conn_fd].filename);
-                // TODO: Add lock
-                // TODO: check if the request should be rejected.
+
+        if (ret < 0) {
+            fprintf(stderr, CTRLSEQ_RED "Bad request from %s\n" CTRLSEQ_RESET, requestP[conn_fd].host);
+            continue;
+        }
+        // requestP[conn_fd]->filename is guaranteed to be successfully set.
+        if (file_fd == -1) {
+            // open the file here.
+            fprintf(stderr, CTRLSEQ_BLUE "Opening file [%s]\n" CTRLSEQ_RESET, requestP[conn_fd].filename);
+            file_fd = open(requestP[conn_fd].filename, O_RDONLY, 0);
+            struct flock read_lock = {
+                .l_type = F_RDLCK,
+                .l_whence = SEEK_SET
+                // other fields are initialized to zero
+            };
+            if (fcntl(file_fd, F_SETLK, &read_lock) == 0) {
+                lock_ok = 1;
                 write(requestP[conn_fd].conn_fd, accept_header, sizeof(accept_header));
-                file_fd = open(requestP[conn_fd].filename, O_RDONLY, 0);
-                }
+            } else {
+                write(requestP[conn_fd].conn_fd, reject_header, sizeof(reject_header));
+                fprintf(stderr, CTRLSEQ_YELLOW "Rejected fd %d, cannot obtain read lock.\n" CTRLSEQ_RESET, requestP[conn_fd].conn_fd);
+                perror("fnctl");
+            }
+        }
+
+        if (lock_ok) {
             if (ret == 0) break;
             while (1) {
-            ret = read(file_fd, buf, sizeof(buf));
-            if (ret < 0) {
-                fprintf(stderr, "Error when reading file %s\n", requestP[conn_fd].filename);
-                break;
-            } else if (ret == 0) break;
-            write(requestP[conn_fd].conn_fd, buf, ret);
+                ret = read(file_fd, buf, sizeof(buf));
+                if (ret < 0) {
+                    fprintf(stderr, CTRLSEQ_RED "Error when reading file %s\n" CTRLSEQ_RESET, requestP[conn_fd].filename);
+                    break;
+                } else if (ret == 0) break;
+                write(requestP[conn_fd].conn_fd, buf, ret);
+            }
+            fprintf(stderr, CTRLSEQ_GREEN "Done reading file [%s]\n" CTRLSEQ_RESET, requestP[conn_fd].filename);
         }
-        fprintf(stderr, "Done reading file [%s]\n", requestP[conn_fd].filename);
+
+        if (file_fd >= 0) close(file_fd);
+        fprintf(stderr, "End request fd %d\n", requestP[conn_fd].conn_fd);
+        FD_CLR(requestP[conn_fd].conn_fd, &readset);
+        close(requestP[conn_fd].conn_fd);
+        free_request(&requestP[conn_fd]);
 #endif
 
 #ifndef READ_SERVER
-        do {
-            ret = handle_read(&requestP[conn_fd]);
-            if (ret < 0) {
-                fprintf(stderr, "bad request from %s\n", requestP[conn_fd].host);
-                continue;
-            }
-            // requestP[conn_fd]->filename is guaranteed to be successfully set.
-            if (file_fd == -1) {
-                // open the file here.
-                fprintf(stderr, "Opening file [%s]\n", requestP[conn_fd].filename);
-                // TODO: Add lock
-                // TODO: check if the request should be rejected.
-                write(requestP[conn_fd].conn_fd, accept_header, sizeof(accept_header));
-                file_fd = open(requestP[conn_fd].filename, O_WRONLY | O_CREAT | O_TRUNC,
-                        S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+        ret = handle_read(&requestP[conn_fd]);
+        if (ret < 0) {
+            fprintf(stderr, CTRLSEQ_RED "Bad request from %s\n" CTRLSEQ_RESET, requestP[conn_fd].host);
+            continue;
+        }
+
+        file_fd = write_fd[requestP[conn_fd].conn_fd];
+        // requestP[conn_fd]->filename is guaranteed to be successfully set.
+        if (file_fd < 0) {
+            // open the file here.
+            fprintf(stderr, CTRLSEQ_BLUE "Opening file [%s]\n" CTRLSEQ_RESET, requestP[conn_fd].filename);
+            file_fd = open(requestP[conn_fd].filename, O_WRONLY | O_CREAT | O_TRUNC,
+                    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+
+            struct flock write_lock = {
+                .l_type = F_WRLCK,
+                .l_whence = SEEK_SET
+            };
+
+            if (fcntl(file_fd, F_SETLK, &write_lock) == 0) {
+                for (i = 0; i < maxfd; i++) {
+                    if (write_fd[i] >= 0 && same_file(write_fd[i], file_fd)) {
+                        write(requestP[conn_fd].conn_fd, reject_header, sizeof(reject_header));
+                        fprintf(stderr, CTRLSEQ_YELLOW "Rejected fd %d, already opened by fd %d as fd %d\n" CTRLSEQ_RESET, requestP[conn_fd].conn_fd, i, write_fd[i]);
+                        break;
+                    }
                 }
-            if (ret == 0) break;
+                if (i == maxfd) {
+                    // distinct in file descriptors, success
+                    write_fd[requestP[conn_fd].conn_fd] = file_fd;
+                    write(requestP[conn_fd].conn_fd, accept_header, sizeof(accept_header));
+                }
+            } else {
+                write(requestP[conn_fd].conn_fd, reject_header, sizeof(reject_header));
+                fprintf(stderr, CTRLSEQ_YELLOW "Rejected fd %d, cannot obtain write lock.\n" CTRLSEQ_RESET, requestP[conn_fd].conn_fd);
+                perror("fnctl");
+            }
+        }
+
+        // after accepting, the file_fd is copied to write_fd array
+        if (write_fd[requestP[conn_fd].conn_fd] >= 0 && ret > 0) {
+            fprintf(stderr, CTRLSEQ_BLUE "Writing to fd %d\n" CTRLSEQ_RESET, file_fd);
             write(file_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len);
-        } while (ret > 0);
-        fprintf(stderr, "Done writing file [%s]\n", requestP[conn_fd].filename);
-#endif
+            continue;
+        }
 
+        // implies ret == 0
+        if (write_fd[requestP[conn_fd].conn_fd] >= 0) {
+            fprintf(stderr, CTRLSEQ_GREEN "Done writing file [%s]\n" CTRLSEQ_RESET, requestP[conn_fd].filename);
+            write_fd[requestP[conn_fd].conn_fd] = -1;
+            close(file_fd);
+        }
 
-        if (file_fd >= 0) close(file_fd);
+        fprintf(stderr, "End request fd %d\n", requestP[conn_fd].conn_fd);
+        FD_CLR(requestP[conn_fd].conn_fd, &readset);
         close(requestP[conn_fd].conn_fd);
         free_request(&requestP[conn_fd]);
+#endif
     }
 
     free(requestP);
@@ -263,4 +418,3 @@ static void* e_malloc(size_t size) {
     if (ptr == NULL) ERR_EXIT("out of memory");
     return ptr;
 }
-
