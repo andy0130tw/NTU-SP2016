@@ -298,14 +298,14 @@ int main(int argc, char** argv) {
         }
 
         // after accepting, the file_fd is copied to write_fd array
-        if (write_fd[requestP[conn_fd].conn_fd] >= 0 && ret > 0) {
-            fprintf(stderr, CTRLSEQ_BLUE "Writing to fd %d\n" CTRLSEQ_RESET, file_fd);
-            write(file_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len);
-            continue;
-        }
-
-        // implies ret == 0
         if (write_fd[requestP[conn_fd].conn_fd] >= 0) {
+            if (ret > 0) {
+                fprintf(stderr, CTRLSEQ_BLUE "Writing to fd %d\n" CTRLSEQ_RESET, file_fd);
+                write(file_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len);
+                // not closing the file yet
+                continue;
+            }
+            // implies ret == 0
             fprintf(stderr, CTRLSEQ_GREEN "Done writing file [%s]\n" CTRLSEQ_RESET, requestP[conn_fd].filename);
             write_fd[requestP[conn_fd].conn_fd] = -1;
             close(file_fd);
