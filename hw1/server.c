@@ -232,7 +232,7 @@ int main(int argc, char** argv) {
                 write(requestP[conn_fd].conn_fd, accept_header, sizeof(accept_header));
             } else {
                 write(requestP[conn_fd].conn_fd, reject_header, sizeof(reject_header));
-                fprintf(stderr, CTRLSEQ_YELLOW "Rejected fd %d, cannot obtain read lock.\n" CTRLSEQ_RESET, requestP[conn_fd].conn_fd);
+                fprintf(stderr, CTRLSEQ_YELLOW "Rejected fd %d, cannot obtain read lock\n" CTRLSEQ_RESET, requestP[conn_fd].conn_fd);
                 perror("fnctl");
             }
         }
@@ -292,7 +292,7 @@ int main(int argc, char** argv) {
                 }
             } else {
                 write(requestP[conn_fd].conn_fd, reject_header, sizeof(reject_header));
-                fprintf(stderr, CTRLSEQ_YELLOW "Rejected fd %d, cannot obtain write lock.\n" CTRLSEQ_RESET, requestP[conn_fd].conn_fd);
+                fprintf(stderr, CTRLSEQ_YELLOW "Rejected fd %d, cannot obtain write lock\n" CTRLSEQ_RESET, requestP[conn_fd].conn_fd);
                 perror("fnctl");
             }
         }
