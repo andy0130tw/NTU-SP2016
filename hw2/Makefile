@@ -9,7 +9,7 @@ CFLAGS = -g -Wall -DCOLOR
 
 all: big_judge judge player
 
-debug: CFLAGS += -DDEBUG
+debug: CFLAGS += -DDEBUG -DVERBOSE
 debug: all
 
 big_judge: big_judge.c $(CHDRS)
