@@ -245,6 +245,7 @@ int main(int argc, char *argv[]) {
       strcat(prev_result_buf, "\n");
     }
 
+    close(fifo_report);
     for (int i = 0; i < 4; i++) {
       if (players[i].fifo > 0)
         close(players[i].fifo);
