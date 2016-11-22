@@ -183,7 +183,7 @@ int main(int argc, char *argv[]) {
         // if it is ok and there are still tasks to assigned
         if (FD_ISSET(i, &fds_write) &&
           child_fd_is_ready[i] && curr_judge < total_judges) {
-          printf("assigning fd_w=%d with task %d/%d...\n", i, curr_judge + 1, total_judges);
+          fprintf(stderr, "assigning fd_w=%d with task %d/%d...\n", i, curr_judge + 1, total_judges);
           dprintf(i, "%d %d %d %d\n",
             players_arr[curr_judge][0],
             players_arr[curr_judge][1],
