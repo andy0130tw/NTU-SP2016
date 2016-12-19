@@ -1,13 +1,14 @@
 #include<stdio.h>
 #define BUFSIZE 1024
 
-int main(int argc, char* argv[]) {
-  if (argc != 2) {
-    fprintf(stderr, "Usage: %s filename\n", argv[0]);
+int main() {
+  char filename[1024];
+  if (scanf("%s", filename) == EOF) {
+    fprintf(stderr, "expecting <filename> from stdin.\n");
     return -1;
   }
 
-  FILE* fp = fopen(argv[1], "r");
+  FILE* fp = fopen(filename, "r");
   if (!fp) {
     perror("fopen");
     return 1;
