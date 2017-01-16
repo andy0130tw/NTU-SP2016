@@ -16,9 +16,9 @@
 #define PRINTED_DIMENSON 8
 
 #define BAGGING_DATASET_TIME(setsize)  ((setsize) / 8)
-#define BAGGING_FEATURES_TIME(dimen)  ((dimen) / 3)
+#define BAGGING_FEATURES_TIME(dimen)  ((dimen) / 3)  // not used for now
 
-// for simplicity, the leaf (determined state) are store as
+// for simplicity, the leaves (having determined state) are stored as
 // node with negative dimen.
 // -1: verdict=0; -2: verdict=1
 #define DETERMINED_STATE(verdict)  ((verdict) == 0 ? -1 : -2)
@@ -72,10 +72,10 @@ dtree* getDTreeNode(int dimen) {
   return ret;
 }
 
-void printRow(record* row) {
+void printRow(FILE* outp, record* row) {
   for (int i = 0; i < PRINTED_DIMENSON; i++)
-    printf("%8.2lf ", row->data[i]);
-  printf("// %d\n", row->result);
+    fprintf(outp, "%2.0lf ", row->data[i]);
+  fprintf(outp, "// %d\n", row->result);
 }
 
 void printDTree(FILE* outp, dtree* t) {
@@ -141,7 +141,7 @@ int optimalHalf(record* rows[], int n, int dimen, double* impurity) {
 
     // split at better position
     double splitMul = 1.f * m * (n - m) / (n * n);
-    if (splitMul < 0.1f) continue;
+    if (splitMul < 0.05f) continue;
 
     int mComp = n - m;
     int zeroComp = zeroTotal - zeroCount;
@@ -247,8 +247,22 @@ dtree* dicisionTree(record* rows[], int n, int usedFeatures[]) {
   // why can this happen?)
   if (optiSplit < 0) {
     // we count the majority of the result and determine a result
-    int verd = LEQ_HALF(countZeros(rows, n), n) ? 0 : 1;
+    int zeroVote = countZeros(rows, n);
+    int verd = LEQ_HALF(zeroVote, n) ? 0 : 1;
+    if (zeroVote != 0 && zeroVote != n) {
+      double zeroRate = 1.f * zeroVote / n;
+      double cert = verd == 0 ? zeroRate : (1 - zeroRate);
+      fprintf(stderr, "Aggregate impurely at depth %d: verd=%d (size: %d, certainity: %.1lf%%)\n",
+        depth, verd, n, 100.f * cert);
+#ifdef VERBOSE
+      for (int i = 0; i < n; i++) {
+        fprintf(stderr, "[%5d]", rows[i]->id);
+        printRow(stderr, rows[i]);
+      }
+#endif  // VERBOSE
+    }
     node->dimen = DETERMINED_STATE(verd);
+    // node->dimen = DETERMINED_STATE(1);
     return node;
   }
 
@@ -259,16 +273,19 @@ dtree* dicisionTree(record* rows[], int n, int usedFeatures[]) {
   // okay to determine the result!
   if (optiImpur < 1e-10f || depth >= MAX_DTREE_DEPTH - 1) {
     // -1: verdict=0; -2: verdict=1
-    int leftVerd = LEQ_HALF(countZeros(rows, optiSplit), optiSplit) ? 0 : 1;
-    double zeroRate = 1.f * countZeros(rows, optiSplit) / optiSplit;
-    double certainity = leftVerd == 0 ? zeroRate : (1 - zeroRate);
+    int zeroVoteL = countZeros(rows, optiSplit);
+    int zeroVoteR = countZeros(rows + optiSplit, n - optiSplit);
+    int verdL = LEQ_HALF(zeroVoteL, optiSplit) ? 0 : 1;
+    double zeroRateL = 1.f * zeroVoteL / optiSplit;
+    double certL = verdL == 0 ? zeroRateL : (1 - zeroRateL);
+    double certR = 1.f * zeroVoteR / (n - optiSplit);
     if (depth >= MAX_DTREE_DEPTH - 1) {
-      fprintf(stderr, "Prune at depth %d: left=%d (size: %d/%d, certainity: %.2lf%%)\n",
-      depth, leftVerd, optiSplit, n - optiSplit, 100.f * certainity);
+      fprintf(stderr, "Prune at depth %d: left=%d (size: %d/%d, certainity: %.1lf%%/%.1lf%%)\n",
+        depth, verdL, optiSplit, n - optiSplit, 100.f * certL, 100.f * certR);
     }
     // assert(certainity > .4999f);
-    node->left = getDTreeNode(DETERMINED_STATE(leftVerd));
-    node->right = getDTreeNode(DETERMINED_STATE(!leftVerd));
+    node->left = getDTreeNode(DETERMINED_STATE(verdL));
+    node->right = getDTreeNode(DETERMINED_STATE(!verdL));
     return node;
   }
 
