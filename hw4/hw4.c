@@ -10,12 +10,12 @@
 
 #define MAX_TRAIN_DATA 25600
 #define MAX_TEST_DATA 25600
-#define MAX_DTREE_DEPTH 200
-#define FOREST_SIZE 400
+#define MAX_DTREE_DEPTH 100
+#define FOREST_SIZE 500
 #define DATA_DIMENSON 33
 #define PRINTED_DIMENSON 8
 
-#define BAGGING_DATASET_TIME(setsize)  ((setsize) / 3)
+#define BAGGING_DATASET_TIME(setsize)  ((setsize) / 8)
 #define BAGGING_FEATURES_TIME(dimen)  ((dimen) / 3)
 
 // for simplicity, the leaf (determined state) are store as
@@ -141,7 +141,7 @@ int optimalHalf(record* rows[], int n, int dimen, double* impurity) {
 
     // split at better position
     double splitMul = 1.f * m * (n - m) / (n * n);
-    if (splitMul < 0.18763f) continue;
+    if (splitMul < 0.1f) continue;
 
     int mComp = n - m;
     int zeroComp = zeroTotal - zeroCount;
@@ -225,8 +225,8 @@ dtree* dicisionTree(record* rows[], int n, int usedFeatures[]) {
 
   int optiSplit = -1;
 
-  // for (int i = 0; i < DATA_DIMENSON; i++) {
-  for (int i = 0; i < BAGGING_DATASET_TIME(DATA_DIMENSON); i++) {
+  for (int i = 0; i < DATA_DIMENSON; i++) {
+  // for (int i = 0; i < BAGGING_DATASET_TIME(DATA_DIMENSON); i++) {
     int dimen = i;
     if (!usedFeatures[dimen]) continue;
 
@@ -359,10 +359,14 @@ int main(int argc, char* argv[]) {
       pickedData[p] = dataset[rnd(n)];
     }
 
-    int usedFeatures[DATA_DIMENSON] = {};
-    for (int i = 0; i < BAGGING_FEATURES_TIME(DATA_DIMENSON); i++) {
-      usedFeatures[i] = 1;
-    }
+    int usedFeatures[DATA_DIMENSON] = {
+#if DATA_DIMENSON == 33
+      1,1,1,1,1,1,1,1,1,1,
+      1,1,1,1,0,0,0,0,1,1,
+      1,0,1,0,0,1,1,1,1,0,
+      0,0,0
+#endif
+    };
     forest[i] = dicisionTree(pickedData, pickSize, usedFeatures);
 #ifdef EVERY_DETAILS
     printDTree(stderr, forest[i]);
@@ -383,6 +387,16 @@ int main(int argc, char* argv[]) {
   }
 
   qsort(&treeScore, FOREST_SIZE, sizeof(dtreepair), cmpDT);
+
+#ifdef VERBOSE
+  for (int d = 0; d < FOREST_SIZE; d++) {
+    if (d % 5 == 0 && d != 0)
+      fprintf(stderr, "\n");
+    fprintf(stderr, "#%3d: %5d  ", d, treeScore[d].score);
+  }
+  fprintf(stderr, "\n");
+#endif  // VERBOSE
+
   const int pickFSize = FOREST_SIZE * 7 / 10;
 
   /********************** TESTING **********************/
@@ -411,6 +425,8 @@ int main(int argc, char* argv[]) {
 #ifdef VERBOSE
   fprintf(stderr, "Testing data read. Dataset size is %d.\n", nn);
 #endif
+
+  fprintf(stderr, "Start testing... \n");
 
 // TODO: start threading
 // to be percise; spread testing data instead of trees!
