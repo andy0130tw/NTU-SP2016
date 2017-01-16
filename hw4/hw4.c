@@ -365,6 +365,8 @@ int main(int argc, char* argv[]) {
       1,1,1,1,0,0,0,0,1,1,
       1,0,1,0,0,1,1,1,1,0,
       0,0,0
+#else
+    #warning "No data is initialized in usedFeatures if DATA_DIMENSON is not 33 (TODO)."
 #endif
     };
     forest[i] = dicisionTree(pickedData, pickSize, usedFeatures);
