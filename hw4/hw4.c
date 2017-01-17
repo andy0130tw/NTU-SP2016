@@ -7,15 +7,18 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+
+#define THREADS 4
 
 #define MAX_TRAIN_DATA 25600
 #define MAX_TEST_DATA 25600
 #define MAX_DTREE_DEPTH 100
-#define FOREST_SIZE 500
+#define FOREST_SIZE 4
 #define DATA_DIMENSON 33
 #define PRINTED_DIMENSON 8
 
-#define BAGGING_DATASET_TIME(setsize)  ((setsize) / 8)
+#define BAGGING_DATASET_TIME(setsize)  ((setsize) / 12)
 #define BAGGING_FEATURES_TIME(dimen)  ((dimen) / 3)  // not used for now
 
 // for simplicity, the leaves (having determined state) are stored as
@@ -24,6 +27,11 @@
 #define DETERMINED_STATE(verdict)  ((verdict) == 0 ? -1 : -2)
 // less or equal to half; used in branching to determine major group
 #define LEQ_HALF(a,b)  ((a) * 2 >= (b))
+
+// some default location of data
+const char* def_trainDataFname = "../data/training_data";
+const char* def_testDataFname  = "../data/testing_data";
+const char* def_outputFname    = "./submission.csv";
 
 typedef struct _dtree {
   int dimen;
@@ -43,15 +51,35 @@ typedef struct {
   char result;
 } record;
 
+typedef struct {
+  int id;
+  int n;
+  int pickSize;
+  int amount;
+  record** dataset;
+  record** pickedData;
+  dtree** treeRootPtr;
+} trainInstr;
+
+pthread_mutex_t treeNodeMutex;
+
 int rnd(int range) {
   return (int)(range * ((double)rand() / RAND_MAX));
 }
 
 dtree* getDTreeNode(int dimen) {
+  // to avoid race condition, use it...
+  // dtree* ret = (dtree*) malloc(sizeof(dtree));
+  // ret->dimen = dimen;
+  // return ret;
+
   static int counter;
   static dtree* allocated;
   // allocate 1M memory at a time
   static const int allocSize = 1048576 / sizeof(dtree);
+
+  // ... or rely on thread-safe malloc in glibc
+  // plus mutex to manage memory on one's own
   if (counter == 0) {
 #ifdef VERBOSE
     fprintf(stderr, "INFO: allocated %d dtree nodes\n", allocSize);
@@ -63,7 +91,9 @@ dtree* getDTreeNode(int dimen) {
     }
   }
   assert(counter < allocSize);
+  pthread_mutex_lock(&treeNodeMutex);
   dtree* ret = &allocated[counter++];
+  pthread_mutex_unlock(&treeNodeMutex);
   ret->dimen = dimen;
   if (counter == allocSize) {
     counter = 0;
@@ -181,14 +211,6 @@ int optimalHalf(record* rows[], int n, int dimen, double* impurity) {
   return optiSplit;
 }
 
-int sortDimen;
-
-int cmp(const void* _a, const void* _b) {
-  double* a = (*(record**)_a)->data;
-  double* b = (*(record**)_b)->data;
-  return a[sortDimen] - b[sortDimen];
-}
-
 int cmpDimen(const void* _a, const void* _b, void* _x) {
   double* a = (*(record**)_a)->data;
   double* b = (*(record**)_b)->data;
@@ -201,17 +223,13 @@ int cmpDT(const void* a, const void* b) {
 }
 
 void sortByDimen(record* rows[], int n, int dimen) {
+  if (dimen < 0 || dimen >= DATA_DIMENSON)
+    fprintf(stderr, "%d\n", dimen);
   assert(dimen >= 0 && dimen < DATA_DIMENSON);
-  // TODO: lock sortDimen? or consider qsort_r
-  // sortDimen = dimen;
-  // qsort(rows, n, sizeof(record*), cmp);
   qsort_r(rows, n, sizeof(record*), cmpDimen, &dimen);
-  // TODO: unlock sortDimen?
 }
 
-dtree* dicisionTree(record* rows[], int n, int usedFeatures[]) {
-  static int depth = 0;
-
+dtree* dicisionTree(record* rows[], int n, int usedFeatures[], int depth) {
   double optiImpur = 1.f;
 
   dtree* node = getDTreeNode(0);
@@ -290,13 +308,10 @@ dtree* dicisionTree(record* rows[], int n, int usedFeatures[]) {
   }
 
   sortByDimen(rows, n, node->dimen);
-  depth++;
   // fprintf(stderr, "Left  node (dep=%d): ", depth);
-  node->left = dicisionTree(rows, optiSplit, usedFeatures);
+  node->left = dicisionTree(rows, optiSplit, usedFeatures, depth + 1);
   // fprintf(stderr, "Right node (dep=%d): ", depth);
-  node->right = dicisionTree(rows + optiSplit, n - optiSplit, usedFeatures);
-  depth--;
-
+  node->right = dicisionTree(rows + optiSplit, n - optiSplit, usedFeatures, depth + 1);
   return node;
 }
 
@@ -317,7 +332,42 @@ void outputVerdict(record* rows[], int n, FILE* outp) {
   }
 }
 
+void* train(void* _instr) {
+  trainInstr* instr = (trainInstr*) _instr;
+  record** pickedData = (record**) malloc(instr->pickSize * sizeof(record*));
+
+  for (int i = 0; i < instr->amount; i++) {
+    fprintf(stderr, "#%d: Making decision tree (%d/%d)\n", instr->id, i + 1, instr->amount);
+    for (int p = 0; p < instr->pickSize; p++) {
+      pickedData[p] = instr->dataset[rnd(instr->n)];
+    }
+
+    int usedFeatures[DATA_DIMENSON] = {
+#if DATA_DIMENSON == 33
+      1,1,1,1,1,1,1,1,1,1,
+      1,1,1,1,0,0,0,0,0,0,
+      0,0,0,0,0,0,0,0,0,0,
+      0,0,0
+#else
+    #warning "No data is initialized in usedFeatures if DATA_DIMENSON is not 33 (TODO)."
+#endif
+    };
+    instr->treeRootPtr[i] = dicisionTree(pickedData, instr->pickSize, usedFeatures, 0);
+
+#ifdef EVERY_DETAILS
+    printDTree(stderr, instr->treeRootPtr[i]);
+#endif  // EVERY_DETAILS
+  }
+
+  free(pickedData);
+
+  return (void*) &(instr->id);
+}
+
 int main(int argc, char* argv[]) {
+  char* trainDataFname = (char*) def_trainDataFname;
+  char* testDataFname  = (char*) def_testDataFname;
+  char* outputFname    = (char*) def_outputFname;
 
   if (argc >= 2) {
     if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
@@ -336,7 +386,6 @@ int main(int argc, char* argv[]) {
 
   /********************** TRAINING **********************/
 
-  const char* trainDataFname = "../data/training_data";
 
 #ifdef VERBOSE
   fprintf(stderr, "Reading training data [%s]...\n", trainDataFname);
@@ -368,31 +417,34 @@ int main(int argc, char* argv[]) {
   int pickSize = BAGGING_DATASET_TIME(n);
   dtree* forest[FOREST_SIZE];
 
-// TODO: start threading
-  record** pickedData = (record**) malloc(pickSize * sizeof(record*));
-  for (int i = 0; i < FOREST_SIZE; i++) {
-    fprintf(stderr, "Making decision tree (%d/%d)\n", i + 1, FOREST_SIZE);
-    for (int p = 0; p < pickSize; p++) {
-      pickedData[p] = dataset[rnd(n)];
-    }
+  fprintf(stderr, "Using %d threads...\n", THREADS);
 
-    int usedFeatures[DATA_DIMENSON] = {
-#if DATA_DIMENSON == 33
-      1,1,1,1,1,1,1,1,1,1,
-      1,1,1,1,0,0,0,0,1,1,
-      1,0,1,0,0,1,1,1,1,0,
-      0,0,0
-#else
-    #warning "No data is initialized in usedFeatures if DATA_DIMENSON is not 33 (TODO)."
-#endif
+  pthread_mutex_init(&treeNodeMutex, NULL);
+
+  trainInstr thrTrain[THREADS];
+  pthread_t thrTrainHdl[THREADS];
+
+  for (int i = 0; i < THREADS; i++) {
+    int amountDiv = FOREST_SIZE / THREADS;
+    int amountRem = FOREST_SIZE % THREADS;
+    thrTrain[i] = (trainInstr) {
+      .id = i,
+      .n = n,
+      .dataset = dataset,
+      .pickSize = pickSize,
+      .amount = amountDiv + (i < amountRem),
+      .treeRootPtr = &forest[FOREST_SIZE / THREADS * i + (i < amountRem ? i : amountRem)]
     };
-    forest[i] = dicisionTree(pickedData, pickSize, usedFeatures);
-#ifdef EVERY_DETAILS
-    printDTree(stderr, forest[i]);
-#endif  // EVERY_DETAILS
+    pthread_create(&thrTrainHdl[i], NULL, train, (void*) &thrTrain[i]);
   }
-  free(pickedData);
-// TODO: end threading
+
+  for (int i = 0; i < THREADS; i++) {
+    int* ptrThrId;
+    pthread_join(thrTrainHdl[i], (void**) &ptrThrId);
+    fprintf(stderr, "Thread #%d had finished training.\n", *ptrThrId);
+  }
+
+  fprintf(stderr, "Refining trees...\n");
 
   // feedback; throwing away some poorly-trained trees
   // to subtly improve the accuracy when the test data is
@@ -420,7 +472,6 @@ int main(int argc, char* argv[]) {
 
   /********************** TESTING **********************/
 
-  const char* testDataFname = "../data/testing_data";
 
 #ifdef VERBOSE
   fprintf(stderr, "Reading testing data [%s]...\n", testDataFname);
@@ -447,7 +498,6 @@ int main(int argc, char* argv[]) {
 
   fprintf(stderr, "Start testing... \n");
 
-// TODO: start threading
 // to be percise; spread testing data instead of trees!
   for (int i = 0; i < nn; i++) {
     int zeroVote = 0;
@@ -464,9 +514,7 @@ int main(int argc, char* argv[]) {
       i, verdict, zeroVote, pickFSize - zeroVote);
 #endif  // VERBOSE
   }
-// TODO: end threading
 
-  const char* outputFname = "./submission.csv";
   FILE* fout = fopen(outputFname, "w");
   outputVerdict(testdata, nn, fout);
 
